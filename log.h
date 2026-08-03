@@ -175,7 +175,4 @@ do { \
 typedef struct _lastlog_t {
 	unsigned char *buf;
 	unsigned int len;
-	unsigned int compare_len;
-	int *repeated_ptr;
-	unsigned char *compare_ptr;
 } lastlog_t;

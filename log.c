@@ -20,6 +20,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include <string.h>
 #include <stdarg.h>
 #include "ntapi.h"
+#include <psapi.h>
 #include "hooking.h"
 #include "misc.h"
 #include "utf8.h"
@@ -43,6 +44,7 @@ CRITICAL_SECTION g_writing_log_buffer_mutex;
 static SOCKET g_sock;
 static HANDLE g_debug_log_handle;
 static unsigned int g_starttick;
+static LARGE_INTEGER g_qpc_frequency;
 
 static char *g_buffer;
 static volatile int g_idx;
@@ -234,108 +236,33 @@ static int bson_append_ptr(bson *b, const char *name, ULONG_PTR ptr)
 		return bson_append_int(b, name, (int)ptr);
 }
 
-static ULONGLONG filetime_to_ull(const FILETIME *ft)
-{
-	ULARGE_INTEGER value;
-
-	value.LowPart = ft->dwLowDateTime;
-	value.HighPart = ft->dwHighDateTime;
-	return value.QuadPart;
-}
-
 static void log_api_call_metrics(void)
 {
-	static ULONGLONG prev_wall_ms;
-	static ULONGLONG prev_cpu_ms;
-	static ULONGLONG prev_sys_idle;
-	static ULONGLONG prev_sys_kernel;
-	static ULONGLONG prev_sys_user;
-	static DWORD processor_count;
-	FILETIME now;
-	FILETIME create_time;
-	FILETIME exit_time;
-	FILETIME kernel_time;
-	FILETIME user_time;
-	FILETIME idle_time;
-	FILETIME system_kernel_time;
-	FILETIME system_user_time;
-	MEMORYSTATUSEX memstatus;
-	LARGE_INTEGER perf_counter;
-	SYSTEM_INFO system_info;
-	ULONGLONG now_100ns;
-	ULONGLONG now_ms;
-	ULONGLONG timestamp_ms;
-	ULONGLONG kernel_ms = 0;
-	ULONGLONG user_ms = 0;
-	ULONGLONG cpu_ms = 0;
-	ULONGLONG wall_delta_ms = 0;
-	ULONGLONG cpu_delta_ms = 0;
-	ULONGLONG sys_idle = 0;
-	ULONGLONG sys_kernel = 0;
-	ULONGLONG sys_user = 0;
-	ULONGLONG sys_idle_delta = 0;
-	ULONGLONG sys_total_delta = 0;
-	double cpu_load = 0.0;
-	double sys_cpu_load = 0.0;
+	hook_info_t *hookinfo = hook_info();
+	LARGE_INTEGER end;
+	PROCESS_MEMORY_COUNTERS_EX memory_counters;
 
-	if (processor_count == 0) {
-		GetSystemInfo(&system_info);
-		processor_count = system_info.dwNumberOfProcessors ? system_info.dwNumberOfProcessors : 1;
+	if (hookinfo->api_call_start_valid && g_qpc_frequency.QuadPart > 0 && QueryPerformanceCounter(&end) &&
+		end.QuadPart >= hookinfo->api_call_start.QuadPart) {
+		double duration_us = ((double)(end.QuadPart - hookinfo->api_call_start.QuadPart) * 1000000.0) /
+			(double)g_qpc_frequency.QuadPart;
+
+		bson_append_long(g_bson, "qpc_start", hookinfo->api_call_start.QuadPart);
+		bson_append_long(g_bson, "qpc_end", end.QuadPart);
+		bson_append_long(g_bson, "qpc_frequency", g_qpc_frequency.QuadPart);
+		bson_append_double(g_bson, "duration_us", duration_us);
 	}
+	hookinfo->api_call_start_valid = FALSE;
 
-	GetSystemTimeAsFileTime(&now);
-	now_100ns = filetime_to_ull(&now);
-	now_ms = now_100ns / 10000;
-	timestamp_ms = now_ms >= 11644473600000ULL ? now_ms - 11644473600000ULL : 0;
-
-	if (GetProcessTimes(GetCurrentProcess(), &create_time, &exit_time, &kernel_time, &user_time)) {
-		kernel_ms = filetime_to_ull(&kernel_time) / 10000;
-		user_ms = filetime_to_ull(&user_time) / 10000;
-		cpu_ms = kernel_ms + user_ms;
+	memset(&memory_counters, 0, sizeof(memory_counters));
+	memory_counters.cb = sizeof(memory_counters);
+	if (GetProcessMemoryInfo(GetCurrentProcess(), (PROCESS_MEMORY_COUNTERS *)&memory_counters, sizeof(memory_counters))) {
+		bson_append_long(g_bson, "working_set_bytes", memory_counters.WorkingSetSize);
+		bson_append_long(g_bson, "peak_working_set_bytes", memory_counters.PeakWorkingSetSize);
+		bson_append_long(g_bson, "private_usage_bytes", memory_counters.PrivateUsage);
+		bson_append_long(g_bson, "pagefile_usage_bytes", memory_counters.PagefileUsage);
+		bson_append_long(g_bson, "peak_pagefile_usage_bytes", memory_counters.PeakPagefileUsage);
 	}
-
-	if (prev_wall_ms != 0 && now_ms >= prev_wall_ms && cpu_ms >= prev_cpu_ms) {
-		wall_delta_ms = now_ms - prev_wall_ms;
-		cpu_delta_ms = cpu_ms - prev_cpu_ms;
-		if (wall_delta_ms != 0)
-			cpu_load = ((double)cpu_delta_ms * 100.0) / ((double)wall_delta_ms * (double)processor_count);
-	}
-
-	prev_wall_ms = now_ms;
-	prev_cpu_ms = cpu_ms;
-
-	if (GetSystemTimes(&idle_time, &system_kernel_time, &system_user_time)) {
-		sys_idle = filetime_to_ull(&idle_time);
-		sys_kernel = filetime_to_ull(&system_kernel_time);
-		sys_user = filetime_to_ull(&system_user_time);
-
-		if (prev_sys_kernel != 0 && sys_kernel >= prev_sys_kernel && sys_user >= prev_sys_user && sys_idle >= prev_sys_idle) {
-			sys_idle_delta = sys_idle - prev_sys_idle;
-			sys_total_delta = (sys_kernel - prev_sys_kernel) + (sys_user - prev_sys_user);
-			if (sys_total_delta != 0 && sys_total_delta >= sys_idle_delta)
-				sys_cpu_load = ((double)(sys_total_delta - sys_idle_delta) * 100.0) / (double)sys_total_delta;
-		}
-
-		prev_sys_idle = sys_idle;
-		prev_sys_kernel = sys_kernel;
-		prev_sys_user = sys_user;
-	}
-
-	QueryPerformanceCounter(&perf_counter);
-
-	memstatus.dwLength = sizeof(memstatus);
-	if (!GlobalMemoryStatusEx(&memstatus))
-		memstatus.dwMemoryLoad = 0;
-
-	bson_append_long(g_bson, "ts", (int64_t)timestamp_ms);
-	bson_append_long(g_bson, "perf_counter", perf_counter.QuadPart);
-	bson_append_int(g_bson, "mem_load", memstatus.dwMemoryLoad);
-	bson_append_long(g_bson, "proc_kernel_time_ms", (int64_t)kernel_ms);
-	bson_append_long(g_bson, "proc_user_time_ms", (int64_t)user_ms);
-	bson_append_long(g_bson, "proc_cpu_delta_ms", (int64_t)cpu_delta_ms);
-	bson_append_long(g_bson, "wall_delta_ms", (int64_t)wall_delta_ms);
-	bson_append_double(g_bson, "proc_cpu_load", cpu_load);
-	bson_append_double(g_bson, "sys_cpu_load", sys_cpu_load);
 }
 
 static void log_int32(int value)
@@ -595,8 +522,6 @@ void loq(int index, const char *category, const char *name,
 	const char * fmtbak = fmt;
 	int argnum = 2;
 	int count = 1; char key = 0;
-	unsigned int repeat_offset = 0;
-	unsigned int compare_offset = 0;
 	lasterror_t lasterror;
 	hook_info_t *hookinfo;
 
@@ -779,14 +704,11 @@ void loq(int index, const char *category, const char *name,
 	bson_append_ptr(g_bson, "P", hookinfo->parent_caller_retaddr);
 	bson_append_int(g_bson, "T", GetCurrentThreadId());
 	bson_append_int(g_bson, "t", raw_gettickcount() - g_starttick );
-	// number of times this log was repeated -- we'll modify this
+	// Kept for protocol compatibility; calls are no longer collapsed.
 	bson_append_int(g_bson, "r", 0);
 
-	compare_offset = (unsigned int)(g_bson->cur - bson_data(g_bson));
-	// the repeated value is encoded immediately before the stream we want to compare
-	repeat_offset = compare_offset - 4;
-
-	log_api_call_metrics();
+	if (index >= LOG_ID_PREDEFINED_MAX)
+		log_api_call_metrics();
 
 	bson_append_start_array(g_bson, "args");
 	bson_append_int( g_bson, "0", is_success );
@@ -1175,29 +1097,18 @@ buffer_log:
 	}
 	else {
 		if (lastlog.buf) {
-			unsigned int our_len = bson_size(g_bson) - compare_offset;
-			if (lastlog.compare_len == our_len && !memcmp(lastlog.compare_ptr, bson_data(g_bson) + compare_offset, our_len)) {
-				// we're about to log a duplicate of the last log message, just increment the previous log's repeated count
-				(*lastlog.repeated_ptr)++;
-			}
+			if (g_config.force_flush == 1)
+				log_flush();
 			else {
-				// flush logs once we're done seeing duplicates of a particular API
-				if (g_config.force_flush == 1)
-					log_flush();
-				else {
-					log_raw_direct(lastlog.buf, lastlog.len);
-					free(lastlog.buf);
-					lastlog.buf = NULL;
-				}
+				log_raw_direct(lastlog.buf, lastlog.len);
+				free(lastlog.buf);
+				lastlog.buf = NULL;
 			}
 		}
 		if (lastlog.buf == NULL) {
 			lastlog.len = bson_size(g_bson);
 			lastlog.buf = malloc(lastlog.len);
 			memcpy(lastlog.buf, bson_data(g_bson), lastlog.len);
-			lastlog.compare_len = lastlog.len - compare_offset;
-			lastlog.compare_ptr = lastlog.buf + compare_offset;
-			lastlog.repeated_ptr = (int *)(lastlog.buf + repeat_offset);
 		}
 	}
 
@@ -1483,6 +1394,9 @@ DWORD g_logwatcher_thread_id;
 
 void log_init(int debug)
 {
+	if (!QueryPerformanceFrequency(&g_qpc_frequency))
+		g_qpc_frequency.QuadPart = 0;
+
 	g_buffer = calloc(1, BUFFERSIZE);
 
 	g_log_flush = CreateEvent(NULL, FALSE, FALSE, NULL);
