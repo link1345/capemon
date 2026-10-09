@@ -707,7 +707,7 @@ void loq(int index, const char *category, const char *name,
 	// Kept for protocol compatibility; calls are no longer collapsed.
 	bson_append_int(g_bson, "r", 0);
 
-	if (index >= LOG_ID_PREDEFINED_MAX)
+	if (index >= LOG_ID_PREDEFINED_MAX && g_config.api_call_metrics)
 		log_api_call_metrics();
 
 	bson_append_start_array(g_bson, "args");
@@ -1394,7 +1394,7 @@ DWORD g_logwatcher_thread_id;
 
 void log_init(int debug)
 {
-	if (!QueryPerformanceFrequency(&g_qpc_frequency))
+	if (!g_config.api_call_metrics || !QueryPerformanceFrequency(&g_qpc_frequency))
 		g_qpc_frequency.QuadPart = 0;
 
 	g_buffer = calloc(1, BUFFERSIZE);

@@ -135,6 +135,8 @@ struct _g_config {
 	unsigned int api_rate_cap;
 	// Disable api hooks based on excessive count
 	unsigned int api_cap;
+	// Collect per-API timing and process memory samples (enabled by default).
+	int api_call_metrics;
 
 	// server ip and port
 	//unsigned int host_ip;

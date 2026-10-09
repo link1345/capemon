@@ -19,4 +19,15 @@ There are three main files that define the hooks implemented in capemon:
 3. [hook_{category}.c](./hook_process.c) _(Link is just an example, in this case hook_process.c)_. This set of files is where the implementation of each hook is defined. When defining the behavior of a given hook, you must copy the corresponding definition from the `hooks.h` file and write the code. Remember you can call the original function with `Old_{ApiName}` .
 
 ## Documentation
+### APIコールの時間・メモリ計測
+
+CAPEの解析オプションで `api-call-metrics=0` を指定すると計測を無効にできます。
+`api-call-metrics=1` で有効になり、省略時も有効です。モニターのINI設定でも同じキーを使用できます。
+値は `0` または `1` を指定してください。それ以外は現在の設定を維持します。
+
+無効時は計測用の `QueryPerformanceCounter`、`QueryPerformanceFrequency`、`GetProcessMemoryInfo` の呼出しと
+計測項目のBSON出力をスキップします。通常のAPIログは引き続き記録されます。
+時間はフック開始からログ記録時まで、メモリはログ記録時のプロセス全体の使用量です。CPU使用率やAPI単体のメモリ増分ではありません。
+この設定を使用するには、このブランチからビルドしたモニターDLLをCAPEへ配置してください。
+
 * [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/kevoreilly/capemon)
