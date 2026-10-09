@@ -381,6 +381,9 @@ int WINAPI enter_hook(hook_t *h, ULONG_PTR sp, ULONG_PTR ebp_or_rip)
 			}
 		}
 
+		hookinfo->api_call_start_valid = FALSE;
+		if (g_config.api_call_metrics)
+			hookinfo->api_call_start_valid = QueryPerformanceCounter(&hookinfo->api_call_start);
 		hookinfo->last_hook = hookinfo->current_hook;
 		hookinfo->current_hook = h;
 		hookinfo->stack_pointer = sp;

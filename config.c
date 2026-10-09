@@ -204,6 +204,12 @@ void parse_config_line(char* line)
 		else if (!strcmp(key, "force-flush")) { //For performance reasons, logs are buffered before being sent back to the result server. We make every attempt to flush the buffer at critical points including when exceptions occur, but in some rare termination scenarios, logs may be lost. Set to 1 to force flushing of the log buffers after any non-duplicate API is called, set to 2 to force flushing of every log.
 			g_config.force_flush = atoi(value);
 		}
+		else if (!strcmp(key, "api-call-metrics")) {
+			if (!strcmp(value, "0") || !strcmp(value, "1"))
+				g_config.api_call_metrics = value[0] == '1';
+			else
+				DebugOutput("Config: api-call-metrics expects 0 or 1; keeping current setting.\n");
+		}
 		else if (!strcmp(key, "terminate-event")) {
 			strncpy(g_config.terminate_event_name, value, ARRAYSIZE(g_config.terminate_event_name));
 		}
@@ -1488,6 +1494,7 @@ void read_config(void)
 	g_config.unpacker = 1;
 	g_config.api_cap = 5000;
 	g_config.api_rate_cap = 1;
+	g_config.api_call_metrics = 1;
 	g_config.yarascan = 1;
 	g_config.yara_timeout = 1;
 	g_config.loaderlock_scans = 1;

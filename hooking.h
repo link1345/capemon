@@ -135,6 +135,8 @@ typedef struct _hook_info_t {
 	ULONG_PTR frame_pointer;
 	ULONG_PTR main_caller_retaddr;
 	ULONG_PTR parent_caller_retaddr;
+	LARGE_INTEGER api_call_start;
+	BOOL api_call_start_valid;
 } hook_info_t;
 
 
