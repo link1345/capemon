@@ -48,7 +48,7 @@ extern DWORD_PTR GetEntryPointVA(DWORD_PTR ModuleBase);
 extern ULONG_PTR g_our_dll_base;
 extern BOOL inside_hook(LPVOID Address);
 extern void loq(int index, const char *category, const char *name,
-	int is_success, ULONG_PTR return_value, const char *fmt, ...);
+	int is_success, ULONG_PTR return_value, ULONG_PTR invocation_sp, const char *fmt, ...);
 extern void log_flush();
 extern lookup_t SoftBPs, SyscallBPs;
 extern BOOL InteractiveBreakpointCallback(PBREAKPOINTINFO pBreakpointInfo, struct _EXCEPTION_POINTERS *ExceptionInfo);

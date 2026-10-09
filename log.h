@@ -64,9 +64,10 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 //
 
 #include "hooking.h"
+#include <intrin.h>
 
 void loq(int index, const char *category, const char *name,
-	int is_success, ULONG_PTR return_value, const char *fmt, ...);
+	int is_success, ULONG_PTR return_value, ULONG_PTR invocation_sp, const char *fmt, ...);
 void log_new_process();
 void log_new_thread();
 void log_anomaly(const char *subcategory, const char *msg);
@@ -105,15 +106,15 @@ extern size_t buffer_log_max;
 extern size_t large_buffer_log_max;
 
 #ifdef _WIN64
-#define _LOQ(eval, cat, fmt, ...) \
+#define _LOQ_AT(invocation_sp, eval, cat, fmt, ...) \
 do { \
 	static volatile LONG _index; \
 	if (_index == 0) \
 		InterlockedExchange(&_index, InterlockedIncrement(&g_log_index)); \
-	loq(_index, cat, &__FUNCTION__[4], eval, (ULONG_PTR)ret, fmt, ##__VA_ARGS__); \
+	loq(_index, cat, &__FUNCTION__[4], eval, (ULONG_PTR)ret, (ULONG_PTR)(invocation_sp), fmt, ##__VA_ARGS__); \
 } while (0)
 #else
-#define _LOQ(eval, cat, fmt, ...) \
+#define _LOQ_AT(invocation_sp, eval, cat, fmt, ...) \
 do { \
 	static volatile LONG _index; \
 	__asm { \
@@ -121,12 +122,18 @@ do { \
 	} \
 	if (_index == 0) \
 		InterlockedExchange(&_index, InterlockedIncrement(&g_log_index)); \
-	loq(_index, cat, &__FUNCTION__[4], eval, (ULONG_PTR)ret, fmt, ##__VA_ARGS__); \
+	loq(_index, cat, &__FUNCTION__[4], eval, (ULONG_PTR)ret, (ULONG_PTR)(invocation_sp), fmt, ##__VA_ARGS__); \
 	__asm { \
 		__asm popa \
 	} \
 } while (0)
 #endif
+
+#define _LOQ(eval, cat, fmt, ...) \
+	_LOQ_AT(_AddressOfReturnAddress(), eval, cat, fmt, ##__VA_ARGS__)
+
+/* Auxiliary callbacks are not intervals of the enclosing API. */
+#define LOQ_event_void(cat, fmt, ...) _LOQ_AT(0, TRUE, cat, fmt, ##__VA_ARGS__)
 
 #define LOQ_ntstatus(cat, fmt, ...) _LOQ(NT_SUCCESS(ret), cat, fmt, ##__VA_ARGS__)
 #define LOQ_nonnull(cat, fmt, ...) _LOQ(ret != NULL, cat, fmt, ##__VA_ARGS__)

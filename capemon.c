@@ -121,7 +121,7 @@ VOID CALLBACK New_DllLoadNotification(
 
 	int ret = 0;
 	if (!g_config.tlsdump)
-		LOQ_void("system", "sup", "NotificationReason", NotificationReason == 1 ? "load" : "unload", "DllName", library.Buffer, "DllBase", NotificationReason == 1 ? NotificationData->Loaded.DllBase : NotificationData->Unloaded.DllBase);
+		LOQ_event_void("system", "sup", "NotificationReason", NotificationReason == 1 ? "load" : "unload", "DllName", library.Buffer, "DllBase", NotificationReason == 1 ? NotificationData->Loaded.DllBase : NotificationData->Unloaded.DllBase);
 
 	if (NotificationReason == 1) {
 		BOOL coverage_module = FALSE;

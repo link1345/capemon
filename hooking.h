@@ -25,6 +25,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include "lookup.h"
 #include "config.h"
 #include <Windows.h>
+#include "api_call_metrics.h"
 
 extern DWORD GetTimeStamp(LPVOID Address);
 
@@ -135,8 +136,7 @@ typedef struct _hook_info_t {
 	ULONG_PTR frame_pointer;
 	ULONG_PTR main_caller_retaddr;
 	ULONG_PTR parent_caller_retaddr;
-	LARGE_INTEGER api_call_start;
-	BOOL api_call_start_valid;
+	api_call_metrics_state api_call_metrics;
 } hook_info_t;
 
 
