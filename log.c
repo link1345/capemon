@@ -236,23 +236,19 @@ static int bson_append_ptr(bson *b, const char *name, ULONG_PTR ptr)
 		return bson_append_int(b, name, (int)ptr);
 }
 
-static void log_api_call_metrics(void)
+static void log_api_call_metrics(BOOL start_valid, LARGE_INTEGER start)
 {
-	hook_info_t *hookinfo = hook_info();
 	LARGE_INTEGER end;
+	double duration_us;
 	PROCESS_MEMORY_COUNTERS_EX memory_counters;
 
-	if (hookinfo->api_call_start_valid && g_qpc_frequency.QuadPart > 0 && QueryPerformanceCounter(&end) &&
-		end.QuadPart >= hookinfo->api_call_start.QuadPart) {
-		double duration_us = ((double)(end.QuadPart - hookinfo->api_call_start.QuadPart) * 1000000.0) /
-			(double)g_qpc_frequency.QuadPart;
-
-		bson_append_long(g_bson, "qpc_start", hookinfo->api_call_start.QuadPart);
+	if (start_valid && QueryPerformanceCounter(&end) &&
+		api_call_metrics_duration(start, end, g_qpc_frequency, &duration_us)) {
+		bson_append_long(g_bson, "qpc_start", start.QuadPart);
 		bson_append_long(g_bson, "qpc_end", end.QuadPart);
 		bson_append_long(g_bson, "qpc_frequency", g_qpc_frequency.QuadPart);
 		bson_append_double(g_bson, "duration_us", duration_us);
 	}
-	hookinfo->api_call_start_valid = FALSE;
 
 	memset(&memory_counters, 0, sizeof(memory_counters));
 	memory_counters.cb = sizeof(memory_counters);
@@ -520,7 +516,7 @@ DWORD get_last_api(void)
 }
 
 void loq(int index, const char *category, const char *name,
-	int is_success, ULONG_PTR return_value, const char *fmt, ...)
+	int is_success, ULONG_PTR return_value, ULONG_PTR invocation_sp, const char *fmt, ...)
 {
 	va_list args;
 	const char * fmtbak = fmt;
@@ -528,6 +524,13 @@ void loq(int index, const char *category, const char *name,
 	int count = 1; char key = 0;
 	lasterror_t lasterror;
 	hook_info_t *hookinfo;
+	LARGE_INTEGER metrics_start = {0};
+	BOOL metrics_start_valid = FALSE;
+
+	/* Consume only this invocation, even when the log is suppressed or busy. */
+	if (index >= LOG_ID_PREDEFINED_MAX && g_config.api_call_metrics)
+		metrics_start_valid = api_call_metrics_take(&hook_info()->api_call_metrics,
+			invocation_sp, name, &metrics_start);
 
 	if (index >= LOG_ID_PREDEFINED_MAX && g_config.suspend_logging)
 		return;
@@ -712,7 +715,7 @@ void loq(int index, const char *category, const char *name,
 	bson_append_int(g_bson, "r", 0);
 
 	if (index >= LOG_ID_PREDEFINED_MAX && g_config.api_call_metrics)
-		log_api_call_metrics();
+		log_api_call_metrics(metrics_start_valid, metrics_start);
 
 	bson_append_start_array(g_bson, "args");
 	bson_append_int( g_bson, "0", is_success );
@@ -1142,7 +1145,7 @@ void log_new_process()
 
 	GetSystemTimeAsFileTime(&st);
 
-	loq(LOG_ID_PROCESS, "__notification__", "__process__", 1, 0, "iiiis",
+	loq(LOG_ID_PROCESS, "__notification__", "__process__", 1, 0, 0, "iiiis",
 		"TimeLow", st.dwLowDateTime,
 		"TimeHigh", st.dwHighDateTime,
 		"ProcessIdentifier", GetCurrentProcessId(),
@@ -1152,7 +1155,7 @@ void log_new_process()
 
 void log_new_thread()
 {
-	loq(LOG_ID_THREAD, "__notification__", "__thread__", 1, 0, "l",
+	loq(LOG_ID_THREAD, "__notification__", "__thread__", 1, 0, 0, "l",
 		"ProcessIdentifier", GetCurrentProcessId());
 }
 
@@ -1229,7 +1232,7 @@ void log_environ()
 		sysvolguid = strdup("");
 
 
-	loq(LOG_ID_ENVIRON, "__notification__", "__environ__", 1, 0, "ssissssssiisssphs",
+	loq(LOG_ID_ENVIRON, "__notification__", "__environ__", 1, 0, 0, "ssissssssiisssphs",
 		"UserName", username,
 		"ComputerName", computername,
 		"InstallDate", installdate,
@@ -1267,7 +1270,7 @@ void log_environ()
 void log_hook_anomaly(const char *subcategory, int success,
 	const hook_t *h, const char *msg)
 {
-	loq(LOG_ID_ANOMALY_HOOK, "__notification__", "__anomaly__", success, 0, "issps",
+	loq(LOG_ID_ANOMALY_HOOK, "__notification__", "__anomaly__", success, 0, 0, "issps",
 		"ThreadIdentifier", GetCurrentThreadId(),
 		"Subcategory", subcategory,
 		"FunctionName", h->funcname,
@@ -1277,7 +1280,7 @@ void log_hook_anomaly(const char *subcategory, int success,
 
 void log_anomaly(const char *subcategory, const char *msg)
 {
-	loq(LOG_ID_ANOMALY_GENERIC, "__notification__", "__anomaly__", 1, 0, "iss",
+	loq(LOG_ID_ANOMALY_GENERIC, "__notification__", "__anomaly__", 1, 0, 0, "iss",
 		"ThreadIdentifier", GetCurrentThreadId(),
 		"Subcategory", subcategory,
 		"Message", msg);
@@ -1285,7 +1288,7 @@ void log_anomaly(const char *subcategory, const char *msg)
 
 void log_breakpoint(const char *subcategory, const char *msg)
 {
-	loq(LOG_ID_ANOMALY_GENERIC, "__notification__", "Breakpoint", 1, 0, "iss",
+	loq(LOG_ID_ANOMALY_GENERIC, "__notification__", "Breakpoint", 1, 0, 0, "iss",
 		"ThreadIdentifier", GetCurrentThreadId(),
 		"Subcategory", subcategory,
 		"Message", msg);
@@ -1302,13 +1305,13 @@ void log_syscall(PUNICODE_STRING module, const char *function, PVOID retaddr, DW
 	if (function && strlen(function))
 	{
 		if (module)
-			loq(LOG_ID_SYSCALL, "__notification__", SYSCALL_NAME, retval==0, retval, "iosp",
+			loq(LOG_ID_SYSCALL, "__notification__", SYSCALL_NAME, retval==0, retval, 0, "iosp",
 				"ThreadIdentifier", GetCurrentThreadId(),
 				"Module", module,
 				"Function", function,
 				"Return Address", retaddr);
 		else
-			loq(LOG_ID_SYSCALL, "__notification__", SYSCALL_NAME, retval==0, retval, "isp",
+			loq(LOG_ID_SYSCALL, "__notification__", SYSCALL_NAME, retval==0, retval, 0, "isp",
 				"ThreadIdentifier", GetCurrentThreadId(),
 				"Function", function,
 				"Return Address", retaddr);
@@ -1316,12 +1319,12 @@ void log_syscall(PUNICODE_STRING module, const char *function, PVOID retaddr, DW
 	else
 	{
 		if (module)
-			loq(LOG_ID_SYSCALL, "__notification__", SYSCALL_NAME, retval==0, retval, "iop",
+			loq(LOG_ID_SYSCALL, "__notification__", SYSCALL_NAME, retval==0, retval, 0, "iop",
 				"ThreadIdentifier", GetCurrentThreadId(),
 				"Module", module,
 				"Return Address", retaddr);
 		else
-			loq(LOG_ID_SYSCALL, "__notification__", SYSCALL_NAME, retval==0, retval, "ip",
+			loq(LOG_ID_SYSCALL, "__notification__", SYSCALL_NAME, retval==0, retval, 0, "ip",
 				"ThreadIdentifier", GetCurrentThreadId(),
 				"Return Address", retaddr);
 	}
@@ -1329,7 +1332,7 @@ void log_syscall(PUNICODE_STRING module, const char *function, PVOID retaddr, DW
 
 void log_direct_syscall(const char *function, PVOID addr)
 {
-	loq(LOG_ID_SYSCALL, "__notification__", SYSCALL_NAME, 1, 0, "isp",
+	loq(LOG_ID_SYSCALL, "__notification__", SYSCALL_NAME, 1, 0, 0, "isp",
 		"ThreadIdentifier", GetCurrentThreadId(),
 		"Function", function,
 		"Address", addr);
@@ -1337,7 +1340,7 @@ void log_direct_syscall(const char *function, PVOID addr)
 
 void log_procname_anomaly(PUNICODE_STRING InitialName, PUNICODE_STRING InitialPath, PUNICODE_STRING CurrentName, PUNICODE_STRING CurrentPath)
 {
-	loq(LOG_ID_ANOMALY_PROCNAME, "__notification__", "__anomaly__", 1, 0, "isoooo",
+	loq(LOG_ID_ANOMALY_PROCNAME, "__notification__", "__anomaly__", 1, 0, 0, "isoooo",
 		"ThreadIdentifier", GetCurrentThreadId(),
 		"Subcategory", "procname",
 		"OriginalProcessName", InitialName,
@@ -1362,7 +1365,7 @@ void log_hook_modification(const hook_t *h, const char *origbytes, const char *n
 		sprintf(p, "%02X ", (unsigned char)newbytes[i]);
 	}
 
-	loq(LOG_ID_ANOMALY_HOOKMOD, "__notification__", "__anomaly__", 1, 0, "isspsss",
+	loq(LOG_ID_ANOMALY_HOOKMOD, "__notification__", "__anomaly__", 1, 0, 0, "isspsss",
 		"ThreadIdentifier", GetCurrentThreadId(),
 		"Subcategory", "unhook",
 		"FunctionName", h->funcname,
@@ -1374,7 +1377,7 @@ void log_hook_modification(const hook_t *h, const char *origbytes, const char *n
 
 void log_hook_removal(const hook_t *h)
 {
-	loq(LOG_ID_ANOMALY_HOOKREM, "__notification__", "__anomaly__", 1, 0, "issps",
+	loq(LOG_ID_ANOMALY_HOOKREM, "__notification__", "__anomaly__", 1, 0, 0, "issps",
 		"ThreadIdentifier", GetCurrentThreadId(),
 		"Subcategory", "unhook",
 		"FunctionName", h->funcname,
@@ -1384,7 +1387,7 @@ void log_hook_removal(const hook_t *h)
 
 void log_hook_restoration(const hook_t *h)
 {
-	loq(LOG_ID_ANOMALY_HOOKRES, "__notification__", "__anomaly__", 1, 0, "issps",
+	loq(LOG_ID_ANOMALY_HOOKRES, "__notification__", "__anomaly__", 1, 0, 0, "issps",
 		"ThreadIdentifier", GetCurrentThreadId(),
 		"Subcategory", "unhook",
 		"FunctionName", h->funcname,

@@ -428,6 +428,7 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="alloc.h" />
+    <ClInclude Include="api_call_metrics.h" />
     <ClInclude Include="bson\bson.h" />
     <ClInclude Include="CAPE\CAPE.h" />
     <ClInclude Include="CAPE\Debugger.h" />

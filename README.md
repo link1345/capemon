@@ -28,6 +28,12 @@ CAPEの解析オプションで `api-call-metrics=0` を指定すると計測を
 無効時は計測用の `QueryPerformanceCounter`、`QueryPerformanceFrequency`、`GetProcessMemoryInfo` の呼出しと
 計測項目のBSON出力をスキップします。通常のAPIログは引き続き記録されます。
 時間はフック開始からログ記録時まで、メモリはログ記録時のプロセス全体の使用量です。CPU使用率やAPI単体のメモリ増分ではありません。
+開始QPCは呼び出しのスタック位置ごとに保持し、ネストしたフックでも外側の開始値を保持します。
+終了・巻き戻し済みのフレームは次のフック入口または外側のログ生成時に破棄します。
+補助イベントの `DllLoadNotification` は時間項目を付けず、外側APIの開始値を消費しません。
+QPC取得失敗・不正な周波数・逆転したQPC・64段を超えるネストは、時間項目をゼロにせず欠損として扱います。
+同じ呼び出しから2回目以降のログを生成した場合も、開始値を再利用しません。
+単体検証とCAPE導入済み環境での確認項目は [回帰テスト手順](tests/README-api-call-metrics.md) を参照してください。
 この設定を使用するには、このブランチからビルドしたモニターDLLをCAPEへ配置してください。
 
 * [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/kevoreilly/capemon)

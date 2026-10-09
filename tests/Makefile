@@ -8,7 +8,8 @@ else
 	CC = gcc
 endif
 
-TESTS = $(wildcard *.c)
+# Standalone MSVC regression needs generated production snippets; see its README.
+TESTS = $(filter-out api-call-metrics.c,$(wildcard *.c))
 TESTSEXE = $(TESTS:.c=.exe)
 
 # please build all the object files using the main Makefile (in the parent
